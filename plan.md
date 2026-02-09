@@ -237,6 +237,30 @@ max_seq_len = 32          # 短序列，快速测试
 
 ### 后续扩展方向
 
+#### 重要实现说明
+
+**自回归训练中的Labels对齐**
+
+在自回归语言模型训练中，需要对齐logits和labels，确保：
+- 位置i的输入预测位置i+1的标签
+- 这是标准的"预测下一个token"训练方式
+
+**实现位置**: `models/multimodal_model.py:218-219`
+
+**核心代码**:
+```python
+# 对齐logits和labels
+shift_logits = logits[:, :-1, :].contiguous()  # 取位置0到N-1的预测
+shift_labels = labels[:, 1:].contiguous()      # 取位置1到N的标签
+```
+
+**为什么需要对齐**:
+1. 自回归的本质是预测下一个token
+2. 防止训练时的信息泄露（看到正确答案）
+3. 确保训练和推理的一致性
+
+详细原理说明见: `自回归训练原理说明.md`
+
 #### 短期扩展（容易实现）
 1. **更多层数**: 增加Transformer层数，观察深度的影响
 2. **更大模型**: 增加hidden_dim，观察表达能力的变化

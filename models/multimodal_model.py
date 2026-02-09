@@ -202,14 +202,27 @@ class SimpleMultimodalModel(nn.Module):
                 print("Step 5: 计算损失")
                 print("█"*80)
 
-            # 重塑logits和labels以计算交叉熵
-            # logits: [batch, seq_len, vocab_size] -> [batch*seq_len, vocab_size]
-            # labels: [batch, seq_len] -> [batch*seq_len]
-            logits_flat = logits.view(-1, self.config.vocab_size)
-            labels_flat = labels.view(-1)
+            # 自回归语言模型的标准训练方式：预测下一个token
+            # 位置i的输入预测位置i+1的标签，因此需要对齐logits和labels：
+            # - logits[:, :-1, :]: 取位置0到N-1的预测
+            # - labels[:, 1:]: 取位置1到N的标签
+            #
+            # 对齐示例：
+            # Input:  [101, 200, 300, 400]
+            # Labels: [101, 200, 300, 400]
+            #
+            # 对齐后：
+            # 位置0的输入（101） → 预测位置1的标签（200）
+            # 位置1的输入（200） → 预测位置2的标签（300）
+            # 位置2的输入（300） → 预测位置3的标签（400）
+            shift_logits = logits[:, :-1, :].contiguous()
+            shift_labels = labels[:, 1:].contiguous()
+
+            # 重塑为2D张量以计算交叉熵
+            logits_flat = shift_logits.view(-1, self.config.vocab_size)
+            labels_flat = shift_labels.view(-1)
 
             # 使用ignore_index忽略padding token
-            # 如果tokenizer有pad_token_id，使用它；否则使用-100（CrossEntropyLoss默认ignore值）
             pad_id = getattr(self.config, 'pad_token_id', -100)
             if pad_id is None:
                 pad_id = -100  # 默认值
@@ -220,11 +233,24 @@ class SimpleMultimodalModel(nn.Module):
 
             if debug:
                 print(f"\n✓ 损失计算完成")
+                print(f"  原始logits shape: {logits.shape}")
+                print(f"  偏移后logits shape: {shift_logits.shape}")
+                print(f"  原始labels shape: {labels.shape}")
+                print(f"  偏移后labels shape: {shift_labels.shape}")
                 print(f"  Loss: {loss.item():.4f}")
 
                 # 计算准确率（用于监控）
-                predictions = torch.argmax(logits, dim=-1)
-                accuracy = (predictions == labels).float().mean().item()
+                # 注意：需要使用偏移后的logits和labels
+                predictions = torch.argmax(shift_logits, dim=-1)
+                # 只对非padding token计算准确率
+                if pad_id != -100:
+                    valid_mask = shift_labels != pad_id
+                    if valid_mask.sum() > 0:
+                        accuracy = (predictions[valid_mask] == shift_labels[valid_mask]).float().mean().item()
+                    else:
+                        accuracy = 0.0
+                else:
+                    accuracy = (predictions == shift_labels).float().mean().item()
                 print(f"  Token准确率: {accuracy*100:.2f}%")
 
         if debug:
