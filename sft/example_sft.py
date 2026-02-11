@@ -2,11 +2,18 @@
 推理示例脚本
 演示如何使用多模态模型进行推理
 """
+import sys
+import os
+
+# 添加项目根目录到Python路径
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
 import torch
-from config import ModelConfig
-from models.multimodal_model import SimpleMultimodalModel
-from models.tokenizer import QwenTokenizerWrapper
-from utils.debug_utils import print_tensor_info, visualize_attention
+from sft.config_sft import ModelConfig
+from sft.models.multimodal_model import SimpleMultimodalModel
+from core.tokenizers import QwenTokenizerWrapper
+from core.utils.debug_utils import print_tensor_info, visualize_attention
 
 
 def create_sample_data(config: ModelConfig):

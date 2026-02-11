@@ -5,10 +5,10 @@
 import torch
 import torch.nn as nn
 from .vision_encoder import VisionEncoder
-from .text_encoder import TextEncoder
+from core.modules.text_encoder import TextEncoder
 from .fusion_layer import FusionLayer
-from .text_decoder import TextDecoder
-from utils.debug_utils import print_tensor_info, count_parameters
+from core.modules.text_decoder import TextDecoder
+from core.utils.debug_utils import print_tensor_info, count_parameters
 
 
 class SimpleMultimodalModel(nn.Module):
@@ -292,7 +292,7 @@ def test_multimodal_model():
     """
     测试完整的多模态模型
     """
-    from config import ModelConfig
+    from sft.config_sft import ModelConfig
 
     print("\n" + "="*80)
     print("测试多模态模型")

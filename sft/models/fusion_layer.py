@@ -4,8 +4,8 @@
 """
 import torch
 import torch.nn as nn
-from .attention import CrossAttention, FeedForward
-from utils.debug_utils import print_tensor_info
+from core.modules.attention import CrossAttention, FeedForward
+from core.utils.debug_utils import print_tensor_info
 
 
 class FusionLayer(nn.Module):

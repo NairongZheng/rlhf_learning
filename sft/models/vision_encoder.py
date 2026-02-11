@@ -4,9 +4,9 @@
 """
 import torch
 import torch.nn as nn
-from .position_encoding import Image2DPositionEncoding
-from .attention import TransformerBlock
-from utils.debug_utils import print_tensor_info
+from core.modules.position_encoding import Image2DPositionEncoding
+from core.modules.attention import TransformerBlock
+from core.utils.debug_utils import print_tensor_info
 
 
 class PatchEmbedding(nn.Module):

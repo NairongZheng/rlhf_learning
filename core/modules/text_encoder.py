@@ -1,37 +1,69 @@
 """
-文本解码器（Text Decoder）
-基于融合特征生成文本输出
+文本编码器（Text Encoder）
+将文本序列转换为特征表示
 """
 import torch
 import torch.nn as nn
 from .position_encoding import RotaryPositionEncoding
-from .attention import FeedForward
-from utils.debug_utils import print_tensor_info
+from .attention import TransformerBlock, MultiHeadAttention, FeedForward
+from core.utils.debug_utils import print_tensor_info
 
 
-class DecoderBlockWithRoPE(nn.Module):
+class TextEmbedding(nn.Module):
     """
-    带RoPE的解码器块
+    文本嵌入层
 
-    包含：
-    1. Self-Attention (带RoPE)
-    2. Feed-Forward Network
-    3. LayerNorm + Residual Connection
+    将token ID转换为embedding向量
+    """
+
+    def __init__(self, vocab_size: int, hidden_dim: int):
+        """
+        初始化文本嵌入
+
+        Args:
+            vocab_size: 词汇表大小
+            hidden_dim: embedding维度
+        """
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, hidden_dim)
+
+        # 初始化embedding权重（使用较小的标准差）
+        nn.init.normal_(self.embedding.weight, mean=0.0, std=0.02)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        前向传播
+
+        Args:
+            x: token IDs，shape [batch, seq_len]
+
+        Returns:
+            embeddings，shape [batch, seq_len, hidden_dim]
+        """
+        return self.embedding(x)
+
+
+class TransformerBlockWithRoPE(nn.Module):
+    """
+    带RoPE的Transformer块
+
+    与标准TransformerBlock的区别：
+    - 在attention计算前对Q和K应用RoPE
     """
 
     def __init__(self, hidden_dim: int, num_heads: int,
                  max_seq_len: int = 512, rope_base: int = 10000,
                  dropout: float = 0.1, norm_type: str = "pre"):
         """
-        初始化解码器块
+        初始化
 
         Args:
             hidden_dim: 输入维度
-            num_heads: attention头数
+            num_heads: 注意力头数
             max_seq_len: 最大序列长度
             rope_base: RoPE的base频率
             dropout: dropout率
-            norm_type: LayerNorm类型
+            norm_type: 标准化类型
         """
         super().__init__()
         self.norm_type = norm_type
@@ -64,7 +96,15 @@ class DecoderBlockWithRoPE(nn.Module):
         self.scale = torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32))
 
     def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
-        """分割成多头"""
+        """
+        将hidden_dim分割成多个头
+
+        Args:
+            x: shape [batch, seq_len, hidden_dim]
+
+        Returns:
+            shape [batch, seq_len, num_heads, head_dim]
+        """
         batch_size, seq_len, _ = x.shape
         return x.view(batch_size, seq_len, self.num_heads, self.head_dim)
 
@@ -74,8 +114,10 @@ class DecoderBlockWithRoPE(nn.Module):
         带RoPE的attention计算
 
         Args:
-            query, key, value: [batch, seq_len, hidden_dim]
-            mask: 可选的causal mask
+            query: [batch, seq_len, hidden_dim]
+            key: [batch, seq_len, hidden_dim]
+            value: [batch, seq_len, hidden_dim]
+            mask: 可选的mask
 
         Returns:
             output: [batch, seq_len, hidden_dim]
@@ -83,25 +125,25 @@ class DecoderBlockWithRoPE(nn.Module):
         batch_size = query.shape[0]
         seq_len = query.shape[1]
 
-        # 投影
+        # 投影到Q, K, V
         Q = self.q_proj(query)
         K = self.k_proj(key)
         V = self.v_proj(value)
 
-        # 分割成多头
+        # 分割成多头: [batch, seq_len, num_heads, head_dim]
         Q = self._split_heads(Q)
         K = self._split_heads(K)
         V = self._split_heads(V)
 
-        # 应用RoPE
+        # 应用RoPE到Q和K
         Q, K = self.rope(Q, K)
 
-        # 转置: [batch, num_heads, seq_len, head_dim]
+        # 转置以便计算attention: [batch, num_heads, seq_len, head_dim]
         Q = Q.transpose(1, 2)
         K = K.transpose(1, 2)
         V = V.transpose(1, 2)
 
-        # 计算attention
+        # 计算attention scores
         attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / self.scale
 
         # 应用mask
@@ -115,7 +157,7 @@ class DecoderBlockWithRoPE(nn.Module):
         # 加权求和
         output = torch.matmul(attention_weights, V)
 
-        # 重塑
+        # 重塑: [batch, num_heads, seq_len, head_dim] -> [batch, seq_len, hidden_dim]
         output = output.transpose(1, 2).contiguous().view(batch_size, seq_len, -1)
 
         # 输出投影
@@ -129,7 +171,7 @@ class DecoderBlockWithRoPE(nn.Module):
 
         Args:
             x: 输入，shape [batch, seq_len, hidden_dim]
-            mask: 可选的causal mask
+            mask: 可选的attention mask
 
         Returns:
             输出，shape [batch, seq_len, hidden_dim]
@@ -158,26 +200,27 @@ class DecoderBlockWithRoPE(nn.Module):
         return x
 
 
-class TextDecoder(nn.Module):
+class TextEncoder(nn.Module):
     """
-    文本解码器
+    文本编码器
 
     完整流程：
-    1. Decoder Transformer: 处理融合后的特征（带RoPE）
-    2. LayerNorm: 最终标准化
-    3. Language Model Head: 投影到词汇表，生成logits
+    1. Text Embedding: 将token IDs转换为embeddings
+    2. RoPE: 通过旋转位置编码注入位置信息（在Transformer块内部）
+    3. Transformer: 提取文本特征
+    4. LayerNorm: 最终的标准化
     """
 
-    def __init__(self, hidden_dim: int = 128, vocab_size: int = 1000,
+    def __init__(self, vocab_size: int = 1000, hidden_dim: int = 128,
                  num_heads: int = 4, num_layers: int = 1,
                  max_seq_len: int = 32, rope_base: int = 10000,
                  dropout: float = 0.1, norm_type: str = "pre"):
         """
-        初始化文本解码器
+        初始化文本编码器
 
         Args:
-            hidden_dim: embedding维度
             vocab_size: 词汇表大小
+            hidden_dim: embedding维度
             num_heads: attention头数
             num_layers: Transformer层数
             max_seq_len: 最大序列长度
@@ -186,12 +229,15 @@ class TextDecoder(nn.Module):
             norm_type: LayerNorm类型
         """
         super().__init__()
-        self.hidden_dim = hidden_dim
         self.vocab_size = vocab_size
+        self.hidden_dim = hidden_dim
 
-        # 1. Decoder Transformer块（带RoPE）
-        self.decoder_blocks = nn.ModuleList([
-            DecoderBlockWithRoPE(
+        # 1. Token Embedding
+        self.token_embed = TextEmbedding(vocab_size, hidden_dim)
+
+        # 2. Transformer块（带RoPE）
+        self.transformer_blocks = nn.ModuleList([
+            TransformerBlockWithRoPE(
                 hidden_dim=hidden_dim,
                 num_heads=num_heads,
                 max_seq_len=max_seq_len,
@@ -202,125 +248,91 @@ class TextDecoder(nn.Module):
             for _ in range(num_layers)
         ])
 
-        # 2. 最终LayerNorm
+        # 3. 最终的LayerNorm
         self.norm = nn.LayerNorm(hidden_dim)
 
-        # 3. Language Model Head：投影到词汇表
-        self.lm_head = nn.Linear(hidden_dim, vocab_size, bias=False)
-
-    def forward(self, x: torch.Tensor, causal_mask: torch.Tensor = None,
+    def forward(self, x: torch.Tensor, mask: torch.Tensor = None,
                 debug: bool = False) -> torch.Tensor:
         """
         前向传播
 
         Args:
-            x: 融合后的特征，shape [batch, seq_len, hidden_dim]
-            causal_mask: 可选的causal mask（用于自回归生成）
+            x: token IDs，shape [batch, seq_len]
+            mask: 可选的attention mask
             debug: 是否打印调试信息
 
         Returns:
-            logits，shape [batch, seq_len, vocab_size]
+            文本特征，shape [batch, seq_len, hidden_dim]
         """
         if debug:
             print("\n" + "="*60)
-            print("Text Decoder - 文本解码")
+            print("Text Encoder - 文本编码")
             print("="*60)
-            print_tensor_info("输入特征", x, detailed=False)
 
-        # Step 1: Decoder Transformer处理
+        # Step 1: Token Embedding
         if debug:
-            print(f"\n[1] Decoder Transformer ({len(self.decoder_blocks)}层，带RoPE)")
+            print("\n[1] Token Embedding")
+            print(f"  输入token IDs shape: {x.shape}")
 
-        for i, block in enumerate(self.decoder_blocks):
-            x = block(x, causal_mask)
+        x = self.token_embed(x)
+
+        if debug:
+            print_tensor_info("Token Embeddings", x, detailed=False)
+
+        # Step 2: Transformer处理（包含RoPE）
+        if debug:
+            print(f"\n[2] Transformer处理 ({len(self.transformer_blocks)}层，带RoPE)")
+
+        for i, block in enumerate(self.transformer_blocks):
+            x = block(x, mask)
             if debug:
                 print(f"  第{i+1}层输出shape: {x.shape}")
 
-        # Step 2: 最终LayerNorm
+        # Step 3: 最终LayerNorm
         if debug:
-            print("\n[2] 最终LayerNorm")
+            print("\n[3] 最终LayerNorm")
         x = self.norm(x)
 
-        # Step 3: LM Head投影到词汇表
         if debug:
-            print("\n[3] Language Model Head (投影到词汇表)")
-        logits = self.lm_head(x)
+            print_tensor_info("Text Encoder最终输出", x)
 
-        if debug:
-            print_tensor_info("输出Logits", logits)
-
-        return logits
-
-    def generate_causal_mask(self, seq_len: int, device: torch.device) -> torch.Tensor:
-        """
-        生成causal mask用于自回归生成
-
-        Causal mask确保位置i只能看到位置<=i的信息，不能看到未来的token
-
-        Args:
-            seq_len: 序列长度
-            device: 设备
-
-        Returns:
-            mask，shape [1, 1, seq_len, seq_len]
-        """
-        # 创建下三角矩阵
-        mask = torch.tril(torch.ones(seq_len, seq_len, device=device))
-
-        # 添加batch和head维度
-        mask = mask.unsqueeze(0).unsqueeze(0)
-
-        return mask
+        return x
 
 
-def test_text_decoder():
+def test_text_encoder():
     """
-    测试Text Decoder
+    测试Text Encoder
     """
     print("\n" + "="*60)
-    print("测试Text Decoder")
+    print("测试Text Encoder")
     print("="*60)
 
-    # 参数
-    batch_size = 2
-    seq_len = 16
-    hidden_dim = 128
-    vocab_size = 1000
-    num_heads = 4
-
     # 创建模型
-    decoder = TextDecoder(
-        hidden_dim=hidden_dim,
-        vocab_size=vocab_size,
-        num_heads=num_heads,
+    encoder = TextEncoder(
+        vocab_size=1000,
+        hidden_dim=128,
+        num_heads=4,
         num_layers=1,
         max_seq_len=32
     )
 
     # 打印模型信息
-    total_params = sum(p.numel() for p in decoder.parameters())
+    total_params = sum(p.numel() for p in encoder.parameters())
     print(f"\n总参数量: {total_params:,}")
 
-    # 创建随机输入（融合后的特征）
-    fused_features = torch.randn(batch_size, seq_len, hidden_dim)
-
-    # 创建causal mask
-    causal_mask = decoder.generate_causal_mask(seq_len, fused_features.device)
-    print(f"\nCausal mask shape: {causal_mask.shape}")
+    # 创建随机输入
+    batch_size = 2
+    seq_len = 16
+    tokens = torch.randint(0, 1000, (batch_size, seq_len))
 
     # 前向传播
     print("\n执行前向传播...")
-    logits = decoder(fused_features, causal_mask, debug=True)
+    output = encoder(tokens, debug=True)
 
     print("\n测试完成!")
-    print(f"输入特征shape: {fused_features.shape}")
-    print(f"输出logits shape: {logits.shape}")
-
-    # 生成预测
-    predicted_tokens = torch.argmax(logits, dim=-1)
-    print(f"预测token shape: {predicted_tokens.shape}")
-    print(f"前3个token预测: {predicted_tokens[0, :3].tolist()}")
+    print(f"输入shape: {tokens.shape}")
+    print(f"输出shape: {output.shape}")
 
 
 if __name__ == "__main__":
-    test_text_decoder()
+    test_text_encoder()

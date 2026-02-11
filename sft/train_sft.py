@@ -2,12 +2,20 @@
 训练脚本
 演示多模态模型的完整训练流程，包括前向传播、反向传播和参数更新
 """
+import sys
+import os
+
+# 添加项目根目录到Python路径
+# 这样可以从任何位置运行此脚本，并正确导入sft和core模块
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
 import torch
 import torch.optim as optim
-from config import ModelConfig
-from models.multimodal_model import SimpleMultimodalModel
-from models.tokenizer import QwenTokenizerWrapper
-from utils.debug_utils import (
+from sft.config_sft import ModelConfig
+from sft.models.multimodal_model import SimpleMultimodalModel
+from core.tokenizers import QwenTokenizerWrapper
+from core.utils.debug_utils import (
     print_gradient_info,
     check_gradient_flow,
     plot_loss_curve,
@@ -330,8 +338,6 @@ def full_training():
 
 
 if __name__ == "__main__":
-    import sys
-
     # 根据命令行参数选择模式
     if len(sys.argv) > 1 and sys.argv[1] == "quick":
         quick_test()
