@@ -14,7 +14,7 @@
 ## 🏗️ 项目结构
 
 ```
-mllm_training_debug/
+rlhf_learning/
 ├── core/                       # 共享核心组件
 │   ├── config.py               # 基础配置类
 │   ├── modules/                # 共享模型组件

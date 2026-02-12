@@ -941,7 +941,7 @@ from .debug_utils import (
 #### 🎯 清理后的目录结构
 
 ```
-mllm_training_debug/
+rlhf_learning/
 ├── core/                    # ✅ 共享核心组件
 │   ├── config.py
 │   ├── modules/
@@ -1146,7 +1146,7 @@ mllm_training_debug/
 
 **1. 项目组织：采用平行目录结构**
 ```
-mllm_training_debug/
+rlhf_learning/
 ├── core/           # 共享核心组件（Attention、位置编码、配置基类）
 ├── sft/            # 监督学习（多模态SFT）
 └── rl/             # 强化学习（RL训练）
